@@ -3,7 +3,19 @@ name: Build trail tiles
 on:
   schedule:
     - cron: '0 7 2 * *' # the 2nd of every month, 07:00 UTC
-  workflow_dispatch: {} # "Run workflow" button for a run anytime
+  workflow_dispatch: # "Run workflow" button for a run anytime
+    inputs:
+      photos_only:
+        description: 'Only refresh the built-in nature photos (about 5 minutes)'
+        type: boolean
+        default: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
 jobs:
   build:
@@ -14,21 +26,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - name: Install osmium
+        if: ${{ !inputs.photos_only }}
         run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
       - name: Build tiles from OpenStreetMap
+        if: ${{ !inputs.photos_only }}
         run: bash scripts/build.sh
-      - name: Upload to Cloudflare R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      - name: Upload tiles to Cloudflare R2
+        if: ${{ !inputs.photos_only }}
         run: |
           aws s3 sync out/tiles s3://switchback-trails/tiles \
             --endpoint-url "${{ secrets.R2_ENDPOINT }}" \
             --content-encoding gzip --content-type application/json \
             --cache-control "public, max-age=86400" \
             --delete --only-show-errors
-          echo "Uploaded $(find out/tiles -name '*.json' | wc -l) files."
+          echo "Uploaded $(find out/tiles -name '*.json' | wc -l) tile files."
+
+      - name: Pick built-in nature photos
+        id: scenery
+        continue-on-error: true # a Wikimedia hiccup shouldn't undo the trail tiles
+        run: node scripts/scenery.mjs out/scenery/v1
+      - name: Upload nature photos to Cloudflare R2
+        if: ${{ steps.scenery.outcome == 'success' }}
+        run: |
+          aws s3 sync out/scenery s3://switchback-trails/scenery \
+            --endpoint-url "${{ secrets.R2_ENDPOINT }}" \
+            --exclude "*.json" --content-type image/jpeg \
+            --cache-control "public, max-age=604800" \
+            --delete --only-show-errors
+          aws s3 cp out/scenery/v1/index.json s3://switchback-trails/scenery/v1/index.json \
+            --endpoint-url "${{ secrets.R2_ENDPOINT }}" \
+            --content-type application/json --cache-control "public, max-age=86400" --only-show-errors
+          echo "Uploaded $(find out/scenery -name '*.jpg' | wc -l) nature photos."
