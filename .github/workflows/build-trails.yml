@@ -42,6 +42,17 @@ jobs:
             --cache-control "public, max-age=86400" \
             --delete --only-show-errors
           echo "Uploaded $(find out/tiles -name '*.json' | wc -l) tile files."
+      - name: Upload places and parks to Cloudflare R2
+        if: ${{ !inputs.photos_only }}
+        run: |
+          for d in places parks; do
+            aws s3 sync "out/$d" "s3://switchback-trails/$d" \
+              --endpoint-url "${{ secrets.R2_ENDPOINT }}" \
+              --content-encoding gzip --content-type application/json \
+              --cache-control "public, max-age=86400" \
+              --delete --only-show-errors
+          done
+          echo "Uploaded $(find out/places out/parks -name '*.json' | wc -l) place and park files."
 
       - name: Pick built-in nature photos
         id: scenery
